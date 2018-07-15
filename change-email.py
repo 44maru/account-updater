@@ -6,6 +6,7 @@ import logging.config
 import subprocess
 import base64
 import os
+import distutils.util
 
 from selenium.webdriver.common.keys import Keys
 
@@ -18,8 +19,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
 from selenium.common.exceptions import StaleElementReferenceException
+from selenium.common.exceptions import WebDriverException
 
 ACCOUNT_SETTING_URL = "https://www.nike.com/jp/ja_jp/p/settings"
+MERUADO_POI_POI_URL = "https://m.kuku.lu/index.php"
 CHROME_DRIVER_PATH = "./chromedriver.exe"
 PHANTOMJS_DRIVER_PATH = "./phantomjs.exe"
 LOG_CONF = "./logging.conf"
@@ -28,6 +31,7 @@ CONFIG_TXT = "./config.txt"
 PROXY_TXT = "./proxy.txt"
 CHROME_PROXY_EXTENTION = "proxy_mng.crx"
 KEY_THREAD_NUM = "THREAD_NUM"
+KEY_GET_NEW_ADDRESS_FROM_POI_POI = "GET_NEW_ADDRESS_FROM_MERUADO_POI_POI"
 CONFIG_DICT = {}
 PROXY_LIST = []
 
@@ -55,6 +59,10 @@ HTML_ACCOUNT_SETTING_SAVE_BUTTON_PATH = """//*[@id="content"]/div[1]/div[2]/div[
 HTML_ACCOUNT_SETTING_SAVE_RESULT_PATH = """//*[@id="content"]/div[1]/div[2]/div[1]/form/div[2]/span"""
 HTML_LOGOUT_PATH = """//*[@id="exp-profile-dropdown"]/ul/li[5]/a"""
 HTML_MY_ADD_DIV_PATH_TEMPL = """//*[@id="nike-unite-loginForm"]/div[{}]"""
+
+XPATH_ADD_MAIL_ADDRESS = """//*[@id="link_addMailAddrByAuto"]"""
+XPATH_NEW_ADDRESS_VIEW_DATA = """//*[@id="area-newaddress-view-data"]/div/div[1]/u"""
+XPATH_CLOSE_NEW_ADDRESS_VIEW = """//*[@id="link_newaddr_close"]"""
 
 SUCCESS = "成功"
 ERROR = "失敗"
@@ -177,26 +185,16 @@ class SitePasteThread(threading.Thread):
                     self.driver = None
 
     def send_keys(self, xpath, target_val):
-        self.wait_display(xpath)
+        wait_display(self.driver, xpath)
         self.driver.find_element_by_xpath(xpath).clear()
         self.driver.find_element_by_xpath(xpath).send_keys(target_val)
 
     def send_keys2(self, xpath, target_val):
-        self.wait_display(xpath)
+        wait_display(self.driver, xpath)
         self.driver.find_element_by_xpath(xpath).clear()
         for ch in target_val:
             self.driver.find_element_by_xpath(xpath).send_keys(ch)
             sleep(random.randint(10, 100) / 1000.0)
-
-    def wait_display(self, xpath):
-        cnt = 0
-        while not self.is_displayed(xpath):
-            if cnt > WAIT_SEC:
-                raise Exception
-
-            cnt += 1
-            log.debug("%02d : No display : %s" % (cnt, xpath))
-            sleep(1)
 
     def wait_clickable(self, xpath):
         cnt = 0
@@ -208,13 +206,6 @@ class SitePasteThread(threading.Thread):
             log.debug("%02d : No clickable : %s" % (cnt, xpath))
             sleep(1)
 
-    def is_displayed(self, xpath):
-        while True:
-            try:
-                return self.driver.find_element_by_xpath(xpath).is_displayed()
-            except (StaleElementReferenceException, NoSuchElementException):
-                return False
-
     def click(self, xpath):
         self.click_move_if_need(xpath, False)
 
@@ -223,7 +214,7 @@ class SitePasteThread(threading.Thread):
 
     def click_move_if_need(self, xpath, need_move):
         self.wait_clickable(xpath)
-        self.wait_display(xpath)
+        wait_display(self.driver, xpath)
 
         if need_move:
             self.action = ActionChains(self.driver)
@@ -272,13 +263,13 @@ class SitePasteThread(threading.Thread):
         self.click(HTML_LOGIN_BUTTON_PATH)
 
         cnt = 0
-        while not self.is_displayed(HTML_ACCOUNT_SETTING_EMAIL_PATH):
-            if self.is_displayed(HTML_LOGIN_ERR_MSG_PATH) \
+        while not is_displayed(self.driver, HTML_ACCOUNT_SETTING_EMAIL_PATH):
+            if is_displayed(self.driver, HTML_LOGIN_ERR_MSG_PATH) \
                     and self.driver.find_element_by_xpath(HTML_LOGIN_ERR_MSG_PATH).text == LOGIN_ERR_MSG:
                 log.debug("Login error. account(%s)", email)
                 raise LoginError("Login error")
 
-            if self.is_displayed(HTML_LOGIN_BLOCK_MSG_PATH) \
+            if is_displayed(self.driver, HTML_LOGIN_BLOCK_MSG_PATH) \
                     and self.driver.find_element_by_xpath(HTML_LOGIN_BLOCK_MSG_PATH).text == LOGIN_BLOCK_MSG:
                 log.debug("Login blocked. account(%s)", email)
                 raise LoginError("Login block")
@@ -339,12 +330,12 @@ class SitePasteThread(threading.Thread):
                 self.click(HTML_LOGIN_EMAIL_PATH)
             if random.randint(0, 1) == 0:
                 self.wait_clickable(HTML_LOGIN_PASS_PATH)
-                self.wait_display(HTML_LOGIN_PASS_PATH)
+                wait_display(self.driver, HTML_LOGIN_PASS_PATH)
                 self.element = self.driver.find_element_by_xpath(HTML_LOGIN_PASS_PATH)
                 ActionChains(self.driver).move_to_element(self.element).perform()
             if random.randint(0, 1) == 0:
                 self.wait_clickable(HTML_LOGIN_EMAIL_PATH)
-                self.wait_display(HTML_LOGIN_EMAIL_PATH)
+                wait_display(self.driver, HTML_LOGIN_EMAIL_PATH)
                 self.element = self.driver.find_element_by_xpath(HTML_LOGIN_EMAIL_PATH)
                 ActionChains(self.driver).move_to_element(self.element).perform()
 
@@ -367,9 +358,9 @@ class SitePasteThread(threading.Thread):
 
         cnt = 0
         while True:
-            if self.is_displayed(HTML_ACCOUNT_SETTING_SAVE_RESULT_PATH) \
+            if is_displayed(self.driver, HTML_ACCOUNT_SETTING_SAVE_RESULT_PATH) \
                     and self.driver.find_element_by_xpath(
-                    HTML_ACCOUNT_SETTING_SAVE_RESULT_PATH).text == ACCOUNT_SAVE_SUCCESS_MSG:
+                HTML_ACCOUNT_SETTING_SAVE_RESULT_PATH).text == ACCOUNT_SAVE_SUCCESS_MSG:
                 log.debug("Success account changed (%s)", email)
                 break
 
@@ -382,7 +373,7 @@ class SitePasteThread(threading.Thread):
 
     def click_from_drop_down_list(self, drop_down_list_path, click_path, drop_down_name):
         cnt = 0
-        while not self.is_displayed(drop_down_list_path):
+        while not is_displayed(self.driver, drop_down_list_path):
             self.click_with_move(click_path)
             if cnt > WAIT_SEC:
                 log.debug(
@@ -405,6 +396,9 @@ def load_config():
         if items[0] == KEY_THREAD_NUM:
             CONFIG_DICT[KEY_THREAD_NUM] = int(items[1])
 
+        if items[0] == KEY_GET_NEW_ADDRESS_FROM_POI_POI:
+            CONFIG_DICT[KEY_GET_NEW_ADDRESS_FROM_POI_POI] = bool(distutils.util.strtobool(items[1]))
+
 
 def load_proxy():
     if not os.path.exists(PROXY_TXT):
@@ -414,9 +408,78 @@ def load_proxy():
         PROXY_LIST.append(line.replace("\n", ""))
 
 
+def get_new_address_from_meruado_poi_poi(driver):
+    while True:
+        try:
+            click(driver, XPATH_ADD_MAIL_ADDRESS)
+            wait_display(driver, XPATH_NEW_ADDRESS_VIEW_DATA)
+            sleep(0.1)
+            new_address = driver.find_element_by_xpath(XPATH_NEW_ADDRESS_VIEW_DATA).text
+            while new_address == "":
+                sleep(0.1)
+                new_address = driver.find_element_by_xpath(XPATH_NEW_ADDRESS_VIEW_DATA).text
+            click(driver, XPATH_CLOSE_NEW_ADDRESS_VIEW)
+            return new_address
+
+        except StaleElementReferenceException as e:
+            log.exception("StaleElementReferenceException happened during getting new address : %s.", e)
+            driver = mk_mail_add_poipoi_driver()
+
+        except WebDriverException as e:
+            log.exception("WebDriverException happened during getting new address : %s.", e)
+            driver = mk_mail_add_poipoi_driver()
+
+        except Exception as e:
+            log.exception("Unknown exception happened during getting new address : %s.", e)
+            driver = mk_mail_add_poipoi_driver()
+
+
+def mk_mail_add_poipoi_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("--disk-cache=false")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--headless")
+    driver = webdriver.Chrome(
+        executable_path=CHROME_DRIVER_PATH, chrome_options=options, service_args=["hide_console"])
+    driver.get(MERUADO_POI_POI_URL)
+    return driver
+
+
+def click(driver, xpath):
+    wait_display(driver, xpath)
+    driver.find_element_by_xpath(xpath).click()
+
+
+def wait_display(driver, xpath):
+    cnt = 0
+    while not is_displayed(driver, xpath):
+        if cnt > WAIT_SEC:
+            raise Exception
+
+        cnt += 1
+        log.debug("%02d : No display : %s" % (cnt, xpath))
+        sleep(1)
+
+
+def is_displayed(driver, xpath):
+    while True:
+        try:
+            return driver.find_element_by_xpath(xpath).is_displayed()
+        except (StaleElementReferenceException, NoSuchElementException):
+            return False
+
+
 def read_input_csv():
+    global log
     global input_q
+    driver = None
     line_num = 0
+
+    if CONFIG_DICT.get(KEY_GET_NEW_ADDRESS_FROM_POI_POI, False):
+        log.info("'%s' is enabled. Try to get new mail-address from MAIL_ADDRESS_POI_POI...",
+                 KEY_GET_NEW_ADDRESS_FROM_POI_POI)
+        driver = mk_mail_add_poipoi_driver()
+
     for line in open(INPUT_CSV, "r"):
         line_num += 1
         if line_num == 1:
@@ -427,7 +490,15 @@ def read_input_csv():
         if len(items) != 3:
             continue
 
+        if CONFIG_DICT.get(KEY_GET_NEW_ADDRESS_FROM_POI_POI, False):
+            new_address = get_new_address_from_meruado_poi_poi(driver)
+            items[1] = new_address
+            log.info("Collected new mail address : [%3d] %s", line_num - 1, new_address)
+
         input_q.put(items)
+
+    if driver is not None:
+        driver.quit()
 
 
 def change_email():
