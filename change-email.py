@@ -1,25 +1,26 @@
-import sys
-import threading
+import base64
+import distutils.util
+import logging.config
+import os
 import queue
 import random
-import logging.config
-import subprocess
-import base64
-import os
-import distutils.util
-
-from selenium.webdriver.common.keys import Keys
-
-import licencemanager
+import sys
+import threading
 from datetime import datetime as dt
 from time import sleep
+
 from selenium import webdriver
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, NoAlertPresentException
 from selenium.common.exceptions import StaleElementReferenceException
+from selenium.common.exceptions import UnexpectedAlertPresentException
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.alert import Alert
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support import expected_conditions as EC
+
+import licencemanager
 
 ACCOUNT_SETTING_URL = "https://www.nike.com/jp/ja_jp/p/settings"
 MERUADO_POI_POI_URL = "https://m.kuku.lu/index.php"
@@ -32,6 +33,8 @@ PROXY_TXT = "./proxy.txt"
 CHROME_PROXY_EXTENTION = "proxy_mng.crx"
 KEY_THREAD_NUM = "THREAD_NUM"
 KEY_GET_NEW_ADDRESS_FROM_POI_POI = "GET_NEW_ADDRESS_FROM_MERUADO_POI_POI"
+KEY_MERUADO_POI_POI_USER = "MERUADO_POI_POI_USER"
+KEY_MERUADO_POI_POI_PASS = "MERUADO_POI_POI_PASS"
 CONFIG_DICT = {}
 PROXY_LIST = []
 
@@ -63,6 +66,14 @@ HTML_MY_ADD_DIV_PATH_TEMPL = """//*[@id="nike-unite-loginForm"]/div[{}]"""
 XPATH_ADD_MAIL_ADDRESS = """//*[@id="link_addMailAddrByAuto"]"""
 XPATH_NEW_ADDRESS_VIEW_DATA = """//*[@id="area-newaddress-view-data"]/div/div[1]/u"""
 XPATH_CLOSE_NEW_ADDRESS_VIEW = """//*[@id="link_newaddr_close"]"""
+XPATH_CURRENT_ACCOUNT = """//*[@id="link_logindata"]"""
+XPATH_CURRENT_ACOUNT_USER = """//*[@id="area_numberview"]"""
+XPATH_CURRENT_ACOUNT_PASS = """//*[@id="area_passwordview"]"""
+XPATH_OTHER_ACOUNT = """//*[@id="link_loginform"]"""
+XPATH_OTHER_ACOUNT_USER = """//*[@id="user_number"]"""
+XPATH_OTHER_ACOUNT_PASS = """//*[@id="user_password"]"""
+XPATH_OTHER_ACOUNT_LOGIN = """//*[@id="link_loginform_data"]/div/input"""
+XPATH_OTHER_ACOUNT_SYNC_SETTING_CANCEL = """//*[@id="area-confirm-dialog-button-cancel"]"""
 
 SUCCESS = "成功"
 ERROR = "失敗"
@@ -225,12 +236,7 @@ class SitePasteThread(threading.Thread):
         self.driver.find_element_by_xpath(xpath).click()
 
     def exec_selenium(self, email, new_email, passwd):
-        global need_mouse_moving
-        global mouse_lock
         log.debug("Start updating account %s", email)
-        # mouse_lock.acquire()
-        # need_mouse_moving = True
-        # mouse_lock.release()
         sleep(random.randint(500, 2000) / 1000.0)
         if 0 < len(PROXY_LIST):
             self.b64_json = base64.b64encode(("""{"url":"%s", "proxy":"%s"}""" % (
@@ -280,10 +286,6 @@ class SitePasteThread(threading.Thread):
 
             sleep(1)
             cnt += 1
-
-        mouse_lock.acquire()
-        need_mouse_moving = False
-        mouse_lock.release()
 
         self.update_account_setting(email, new_email)
 
@@ -396,8 +398,14 @@ def load_config():
         if items[0] == KEY_THREAD_NUM:
             CONFIG_DICT[KEY_THREAD_NUM] = int(items[1])
 
-        if items[0] == KEY_GET_NEW_ADDRESS_FROM_POI_POI:
+        elif items[0] == KEY_GET_NEW_ADDRESS_FROM_POI_POI:
             CONFIG_DICT[KEY_GET_NEW_ADDRESS_FROM_POI_POI] = bool(distutils.util.strtobool(items[1]))
+
+        elif items[0] == KEY_MERUADO_POI_POI_USER:
+            CONFIG_DICT[KEY_MERUADO_POI_POI_USER] = items[1]
+
+        elif items[0] == KEY_MERUADO_POI_POI_PASS:
+            CONFIG_DICT[KEY_MERUADO_POI_POI_PASS] = items[1]
 
 
 def load_proxy():
@@ -413,7 +421,7 @@ def get_new_address_from_meruado_poi_poi(driver):
         try:
             click(driver, XPATH_ADD_MAIL_ADDRESS)
             wait_display(driver, XPATH_NEW_ADDRESS_VIEW_DATA)
-            sleep(0.1)
+            sleep(0.5)
             new_address = driver.find_element_by_xpath(XPATH_NEW_ADDRESS_VIEW_DATA).text
             while new_address == "":
                 sleep(0.1)
@@ -423,18 +431,23 @@ def get_new_address_from_meruado_poi_poi(driver):
 
         except StaleElementReferenceException as e:
             log.exception("StaleElementReferenceException happened during getting new address : %s.", e)
+            driver.quit()
             driver = mk_mail_add_poipoi_driver()
 
         except WebDriverException as e:
             log.exception("WebDriverException happened during getting new address : %s.", e)
+            driver.quit()
             driver = mk_mail_add_poipoi_driver()
 
         except Exception as e:
             log.exception("Unknown exception happened during getting new address : %s.", e)
+            driver.quit()
             driver = mk_mail_add_poipoi_driver()
 
 
 def mk_mail_add_poipoi_driver():
+    global log
+
     options = webdriver.ChromeOptions()
     options.add_argument("--disk-cache=false")
     options.add_argument("--disable-infobars")
@@ -442,7 +455,43 @@ def mk_mail_add_poipoi_driver():
     driver = webdriver.Chrome(
         executable_path=CHROME_DRIVER_PATH, chrome_options=options, service_args=["hide_console"])
     driver.get(MERUADO_POI_POI_URL)
+
+    try:
+        login_meruado_poi_poi(driver)
+    except UnexpectedAlertPresentException as e:
+        log.exception("Failed to login MERUADO_POI_POI : %s.", e)
+        driver.quit()
+        raise e
+
+    log.info("Login account ID = %s : PASS = %s", CONFIG_DICT[KEY_MERUADO_POI_POI_USER],
+             CONFIG_DICT[KEY_MERUADO_POI_POI_PASS])
+
     return driver
+
+
+def login_meruado_poi_poi(driver):
+    if CONFIG_DICT[KEY_MERUADO_POI_POI_USER] is None or CONFIG_DICT[KEY_MERUADO_POI_POI_PASS] is None \
+            or CONFIG_DICT[KEY_MERUADO_POI_POI_USER] == "" or CONFIG_DICT[KEY_MERUADO_POI_POI_PASS] == "":
+        click(driver, XPATH_CURRENT_ACCOUNT)
+        wait_display(driver, XPATH_CURRENT_ACOUNT_USER)
+        wait_display(driver, XPATH_CURRENT_ACOUNT_PASS)
+        CONFIG_DICT[KEY_MERUADO_POI_POI_USER] = driver.find_element_by_xpath(XPATH_CURRENT_ACOUNT_USER).text
+        CONFIG_DICT[KEY_MERUADO_POI_POI_PASS] = driver.find_element_by_xpath(XPATH_CURRENT_ACOUNT_PASS).text
+    else:
+        click(driver, XPATH_OTHER_ACOUNT)
+        wait_display(driver, XPATH_OTHER_ACOUNT_USER)
+        driver.find_element_by_xpath(XPATH_OTHER_ACOUNT_USER).send_keys(CONFIG_DICT[KEY_MERUADO_POI_POI_USER])
+        wait_display(driver, XPATH_OTHER_ACOUNT_PASS)
+        driver.find_element_by_xpath(XPATH_OTHER_ACOUNT_PASS).send_keys(CONFIG_DICT[KEY_MERUADO_POI_POI_PASS])
+        click(driver, XPATH_OTHER_ACOUNT_LOGIN)
+        click(driver, XPATH_OTHER_ACOUNT_SYNC_SETTING_CANCEL)
+        while True:
+            try:
+                Alert(driver).accept()
+                break
+            except NoAlertPresentException:
+                pass
+                sleep(0.5)
 
 
 def click(driver, xpath):
@@ -534,23 +583,19 @@ def write_result_csv():
     log.info("Success:%d Fail:%d" % (success_cnt, error_cnt))
     log.info("")
     log.info("Refer %s for more detail." % f.name)
+    log.info("")
 
 
 def mach_license():
     return licencemanager.match_license()
 
 
-def mv_mouse():
-    global is_changing_account
-    global need_mouse_moving
-    global mouse_lock
-
-    while is_changing_account:
-        mouse_lock.acquire()
-        if need_mouse_moving:
-            subprocess.call("UWSC.exe mv_mouse.UWS")
-        mouse_lock.release()
-        sleep(1)
+def output_meruado_poi_poi_info():
+    if CONFIG_DICT.get(KEY_GET_NEW_ADDRESS_FROM_POI_POI, False):
+        log.info("MERUADO_POI_POI account infomation is below.")
+        log.info("ID   = %s", CONFIG_DICT[KEY_MERUADO_POI_POI_USER])
+        log.info("PASS = %s", CONFIG_DICT[KEY_MERUADO_POI_POI_PASS])
+        log.info("")
 
 
 if __name__ == "__main__":
@@ -562,16 +607,16 @@ if __name__ == "__main__":
         sys.exit(-1)
 
     lock = threading.Lock()
-    mouse_lock = threading.Lock()
     input_q = queue.Queue()
     output_q = queue.Queue()
-    load_config()
-    load_proxy()
-    read_input_csv()
-    is_changing_account = True
-    need_mouse_moving = False
-    # threading.Thread(target=mv_mouse).start()
-    change_email()
-    write_result_csv()
-    is_changing_account = False
+    try:
+        load_config()
+        load_proxy()
+        read_input_csv()
+        change_email()
+        write_result_csv()
+        output_meruado_poi_poi_info()
+    except Exception as e:
+        log.exception("Happened exception stop operation... : %s", e)
+
     input("Please push Enter to exit.")
