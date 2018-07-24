@@ -233,7 +233,19 @@ class SitePasteThread(threading.Thread):
             self.action.move_to_element(self.element).perform()
             sleep(0.1)
 
-        self.driver.find_element_by_xpath(xpath).click()
+        cnt = 0
+        exception = None
+        while cnt < WAIT_SEC:
+            try:
+                self.driver.find_element_by_xpath(xpath).click()
+                return
+            except WebDriverException as e:
+                log.debug("WebDriverException happened when clicked '%s'. Retry to click.", xpath)
+                exception = e
+                cnt += 1
+                sleep(0.5)
+
+        raise exception
 
     def exec_selenium(self, email, new_email, passwd):
         log.debug("Start updating account %s", email)
@@ -416,17 +428,23 @@ def load_proxy():
         PROXY_LIST.append(line.replace("\n", ""))
 
 
-def get_new_address_from_meruado_poi_poi(driver):
+def get_new_address_from_meruado_poi_poi(driver, prev_new_addr):
     while True:
         try:
             click(driver, XPATH_ADD_MAIL_ADDRESS)
             wait_display(driver, XPATH_NEW_ADDRESS_VIEW_DATA)
-            sleep(0.5)
-            new_address = driver.find_element_by_xpath(XPATH_NEW_ADDRESS_VIEW_DATA).text
-            while new_address == "":
-                sleep(0.1)
-                new_address = driver.find_element_by_xpath(XPATH_NEW_ADDRESS_VIEW_DATA).text
+
+            while True:
+                try:
+                    new_address = driver.find_element_by_xpath(XPATH_NEW_ADDRESS_VIEW_DATA).text
+                    if new_address != prev_new_addr and new_address != "":
+                        break
+                    sleep(0.1)
+                except StaleElementReferenceException as e:
+                    sleep(0.5)
+
             click(driver, XPATH_CLOSE_NEW_ADDRESS_VIEW)
+
             return new_address
 
         except StaleElementReferenceException as e:
@@ -496,7 +514,13 @@ def login_meruado_poi_poi(driver):
 
 def click(driver, xpath):
     wait_display(driver, xpath)
-    driver.find_element_by_xpath(xpath).click()
+    while True:
+        try:
+            driver.execute_script("arguments[0].click();", driver.find_element_by_xpath(xpath))
+            break
+        except StaleElementReferenceException as e:
+            sleep(0.5)
+    # driver.find_element_by_xpath(xpath).click()
 
 
 def wait_display(driver, xpath):
@@ -511,17 +535,17 @@ def wait_display(driver, xpath):
 
 
 def is_displayed(driver, xpath):
-    while True:
-        try:
-            return driver.find_element_by_xpath(xpath).is_displayed()
-        except (StaleElementReferenceException, NoSuchElementException):
-            return False
+    try:
+        return driver.find_element_by_xpath(xpath).is_displayed()
+    except (StaleElementReferenceException, NoSuchElementException):
+        return False
 
 
 def read_input_csv():
     global log
     global input_q
     driver = None
+    prev_new_addr = "DUMMY"
     line_num = 0
 
     if CONFIG_DICT.get(KEY_GET_NEW_ADDRESS_FROM_POI_POI, False):
@@ -540,8 +564,9 @@ def read_input_csv():
             continue
 
         if CONFIG_DICT.get(KEY_GET_NEW_ADDRESS_FROM_POI_POI, False):
-            new_address = get_new_address_from_meruado_poi_poi(driver)
+            new_address = get_new_address_from_meruado_poi_poi(driver, prev_new_addr)
             items[1] = new_address
+            prev_new_addr = new_address
             log.info("Collected new mail address : [%3d] %s", line_num - 1, new_address)
 
         input_q.put(items)
