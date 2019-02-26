@@ -627,9 +627,9 @@ if __name__ == "__main__":
     logging.config.fileConfig(LOG_CONF)
     log = logging.getLogger()
 
-    if not mach_license():
-        input("Please push Enter to exit.")
-        sys.exit(-1)
+    #if not mach_license():
+    #    input("Please push Enter to exit.")
+    #    sys.exit(-1)
 
     lock = threading.Lock()
     input_q = queue.Queue()
