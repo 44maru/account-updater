@@ -20,7 +20,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 
-import licencemanager
+#import licencemanager
 
 ACCOUNT_SETTING_URL = "https://www.nike.com/jp/ja_jp/p/settings"
 MERUADO_POI_POI_URL = "https://m.kuku.lu/index.php"
@@ -611,8 +611,8 @@ def write_result_csv():
     log.info("")
 
 
-def mach_license():
-    return licencemanager.match_license()
+#def mach_license():
+#    return licencemanager.match_license()
 
 
 def output_meruado_poi_poi_info():
